@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Mathematics Study Assistant</title>
+<style>
+:root{--bg:#f7f6f2;--card:#fff;--text:#1d1c1a;--muted:#6a675f;--line:#e0ddd5;--accent:#2f5fb3;--accent-t:#fff;--chip:#eeece5;--on:#dfe9fb;
+box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#171a20;--card:#20242c;--text:#eceef2;--muted:#9aa1ae;--line:#323844;--accent:#6e9cf0;--accent-t:#10131a;--chip:#2a303b;--on:#2a3b5c;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#171a20;--card:#20242c;--text:#eceef2;--muted:#9aa1ae;--line:#323844;--accent:#6e9cf0;--accent-t:#10131a;--chip:#2a303b;--on:#2a3b5c;color-scheme:dark}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:16px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif}
+main{max-width:840px;margin:0 auto;padding:24px 16px 56px}
+.badge{display:inline-block;font-size:.78rem;letter-spacing:.04em;text-transform:uppercase;color:var(--accent);font-weight:700}
+h1{font-size:1.8rem;margin:2px 0 4px}
+.sub{color:var(--muted);margin:0 0 20px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:16px}
+h2{font-size:1rem;margin:0 0 10px}
+.drop{border:2px dashed var(--line);border-radius:12px;padding:18px;text-align:center;color:var(--muted);cursor:pointer}
+.drop.over{border-color:var(--accent)}
+textarea,input[type=text]{width:100%;font:inherit;color:var(--text);background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:10px}
+textarea{min-height:80px;margin-top:10px;resize:vertical}
+button{font:inherit;cursor:pointer;border:0;border-radius:10px;padding:10px 16px;background:var(--accent);color:var(--accent-t);font-weight:600}
+button.ghost{background:var(--chip);color:var(--text);font-weight:500}
+button:disabled{opacity:.5;cursor:default}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.row input[type=text]{flex:1;min-width:180px}
+.chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}
+.chip{background:var(--chip);border-radius:999px;padding:4px 12px;font-size:.88rem;border:1px solid transparent}
+.chip b{cursor:pointer;margin-left:6px;color:var(--muted)}
+.mode{cursor:pointer;font-weight:500}
+.mode.on{background:var(--on);border-color:var(--accent);color:var(--text)}
+.ex{cursor:pointer;color:var(--muted)}
+.ex:hover{color:var(--text)}
+.msg{white-space:pre-wrap;word-wrap:break-word}
+.q{font-weight:700;margin-bottom:2px}
+.tag{font-size:.8rem;color:var(--accent);font-weight:600;margin-bottom:6px}
+details{margin-top:12px}
+summary{cursor:pointer;color:var(--muted)}
+.src{border-left:3px solid var(--line);padding:4px 10px;margin:8px 0;font-size:.9rem;color:var(--muted)}
+.src b{color:var(--text)}
+.status{color:var(--muted);font-size:.9rem}
+label.chk{display:flex;gap:8px;align-items:flex-start;font-size:.9rem;color:var(--muted);margin-top:12px}
+</style>
+</head>
+<body>
+<main>
+<span class="badge">RAG based app</span>
+<h1>📐 Mathematics Study Assistant</h1>
+<p class="sub">Upload your lecture notes or textbook chapters. Ask for definitions, theorems, explanations, worked examples, or practice questions, and every answer points back to your own material.</p>
+
+<div class="card">
+<h2>1. Add your notes</h2>
+<div class="drop" id="drop">Drop PDF or text files here, or click to choose<input id="file" type="file" accept=".pdf,.txt,.md" multiple hidden></div>
+<textarea id="paste" placeholder="Or paste text from your notes (linear algebra, calculus, probability…)"></textarea>
+<div class="row" style="margin-top:10px"><button class="ghost" id="addPaste">Add pasted text</button><span class="status" id="status"></span></div>
+<div class="chips" id="docs"></div>
+</div>
+
+<div class="card">
+<h2>2. Choose what you need</h2>
+<div class="chips" id="modes" style="margin-top:0"></div>
+<div class="row" style="margin-top:12px"><input type="text" id="q" placeholder="e.g. eigenvalues"><button id="ask">Ask</button></div>
+<div class="chips" id="examples"></div>
+<label class="chk"><input type="checkbox" id="gen"><span>Allow Claude to add general mathematical knowledge when my notes are not enough (these parts will be marked as not from your notes).</span></label>
+<div class="status" id="hint" style="margin-top:8px">Add at least one document first.</div>
+</div>
+
+<div id="out"></div>
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script>
+const CHUNK=1000, OVERLAP=200;
+let docs=[], mode="explain", sampleP=null;
+
+const MODES={
+  explain:{name:"Explain",ph:"e.g. What is a basis of a vector space?",k:4,
+    task:"Explain the topic clearly, step by step, the way a good tutor would, using the notation and approach from the context."},
+  define:{name:"Definition / theorem",ph:"e.g. Rank–nullity theorem",k:3,
+    task:"State the definition or theorem exactly as it appears in the context, with its conditions or hypotheses. Then add one or two lines saying what it means in plain words."},
+  example:{name:"Worked example",ph:"e.g. Find the eigenvalues of a 2×2 matrix",k:4,
+    task:"Give a worked example following the method shown in the context. Show each step and the reasoning for it. If the context contains a worked example, follow it."},
+  practice:{name:"Practice questions",ph:"e.g. Limits and continuity",k:6,
+    task:"Write 5 practice questions on this topic, from easy to harder, based only on the ideas in the context. Put the answers in a separate Answers section at the end, with short working."},
+  summary:{name:"Revision summary",ph:"e.g. Chapter on conditional probability",k:6,
+    task:"Write a concise revision summary: key definitions, main results, and the formulas to remember, as short points."}
+};
+const EXAMPLES=["Define a vector space","State the mean value theorem","Explain Bayes’ theorem","How do I find the inverse of a matrix?"];
+
+const $=id=>document.getElementById(id);
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+function renderModes(){
+  $("modes").innerHTML=Object.entries(MODES).map(([k,m])=>`<span class="chip mode ${k===mode?"on":""}" data-k="${k}">${m.name}</span>`).join("");
+  document.querySelectorAll(".mode").forEach(e=>e.onclick=()=>{mode=e.dataset.k;$("q").placeholder=MODES[mode].ph;renderModes();});
+}
+function renderExamples(){
+  $("examples").innerHTML=EXAMPLES.map(t=>`<span class="chip ex">${esc(t)}</span>`).join("");
+  document.querySelectorAll(".ex").forEach(e=>e.onclick=()=>{$("q").value=e.textContent;$("q").focus();});
+}
+
+function chunkText(text){
+  text=text.replace(/\s+/g," ").trim();
+  const out=[];let i=0;
+  while(i<text.length){
+    let end=Math.min(i+CHUNK,text.length);
+    if(end<text.length){
+      const cut=text.lastIndexOf(". ",end);
+      if(cut>i+CHUNK*0.6) end=cut+1;
+    }
+    const t=text.slice(i,end).trim();
+    if(t) out.push(t);
+    if(end>=text.length) break;
+    i=Math.max(end-OVERLAP,i+1);
+  }
+  return out;
+}
+
+function renderDocs(){
+  $("docs").innerHTML=docs.map((d,i)=>`<span class="chip">${esc(d.name)} · ${d.chunks.length} passages<b data-i="${i}" title="Remove">×</b></span>`).join("");
+  $("hint").textContent=docs.length?"Ready. Pick a mode and ask.":"Add at least one document first.";
+  document.querySelectorAll("#docs b").forEach(b=>b.onclick=()=>{docs.splice(+b.dataset.i,1);renderDocs();});
+}
+function addDoc(name,pages){
+  const chunks=[];
+  pages.forEach(p=>chunkText(p.text).forEach(t=>chunks.push({text:t,label:p.label})));
+  if(!chunks.length){$("status").textContent="No readable text found in "+name+".";return;}
+  docs.push({name,chunks});renderDocs();
+}
+
+async function readPdf(file){
+  if(!window.pdfjsLib) throw new Error("PDF reader could not load");
+  pdfjsLib.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+  const pdf=await pdfjsLib.getDocument({data:await file.arrayBuffer()}).promise;
+  const pages=[];
+  for(let i=1;i<=pdf.numPages;i++){
+    const tc=await (await pdf.getPage(i)).getTextContent();
+    pages.push({label:"p."+i,text:tc.items.map(x=>x.str).join(" ")});
+  }
+  return pages;
+}
+async function handleFiles(files){
+  for(const f of files){
+    $("status").textContent="Reading "+f.name+"…";
+    try{
+      if(/\.pdf$/i.test(f.name)) addDoc(f.name,await readPdf(f));
+      else addDoc(f.name,[{label:"text",text:await f.text()}]);
+      $("status").textContent="";
+    }catch(e){$("status").textContent="Couldn’t read "+f.name+" ("+(e.message||e)+"). Try pasting its text instead.";}
+  }
+}
+const drop=$("drop");
+drop.onclick=()=>$("file").click();
+$("file").onchange=e=>handleFiles(e.target.files);
+drop.ondragover=e=>{e.preventDefault();drop.classList.add("over");};
+drop.ondragleave=()=>drop.classList.remove("over");
+drop.ondrop=e=>{e.preventDefault();drop.classList.remove("over");handleFiles(e.dataTransfer.files);};
+$("addPaste").onclick=()=>{const t=$("paste").value;if(t.trim()){addDoc("Pasted notes "+(docs.length+1),[{label:"text",text:t}]);$("paste").value="";}};
+
+// ---------- Retrieval: BM25 with light stemming ----------
+const STOP=new Set("a an the of to in on for and or is are was were be by with as at from that this it its what how do does can i me my explain define state find give show tell about".split(" "));
+function stem(w){return w.length>4?w.replace(/(ing|ed|es|s)$/,""):w;}
+const tok=s=>(s.toLowerCase().match(/[\p{L}\p{N}]+/gu)||[]).filter(w=>!STOP.has(w)).map(stem);
+function retrieve(query,k){
+  const all=[];
+  docs.forEach(d=>d.chunks.forEach(c=>all.push({doc:d.name,label:c.label,text:c.text,t:tok(c.text)})));
+  const N=all.length,avg=all.reduce((s,c)=>s+c.t.length,0)/N||1,df={};
+  all.forEach(c=>new Set(c.t).forEach(w=>df[w]=(df[w]||0)+1));
+  const q=[...new Set(tok(query))],k1=1.5,b=0.75;
+  all.forEach(c=>{
+    const tf={};c.t.forEach(w=>tf[w]=(tf[w]||0)+1);
+    c.score=q.reduce((s,w)=>{
+      if(!tf[w])return s;
+      const idf=Math.log(1+(N-df[w]+.5)/(df[w]+.5));
+      return s+idf*tf[w]*(k1+1)/(tf[w]+k1*(1-b+b*c.t.length/avg));
+    },0);
+  });
+  return all.filter(c=>c.score>0).sort((a,b)=>b.score-a.score).slice(0,k);
+}
+
+async function getSample(){
+  if(!sampleP) sampleP=(window.claude&&claude.use)?claude.use("sample"):Promise.resolve(null);
+  return sampleP;
+}
+
+$("ask").onclick=async()=>{
+  const question=$("q").value.trim();
+  if(!question) return;
+  if(!docs.length){$("hint").textContent="Add at least one document first.";return;}
+  const m=MODES[mode], allowGeneral=$("gen").checked;
+  const hits=retrieve(question,m.k);
+  const card=document.createElement("div");
+  card.className="card";
+  card.innerHTML=`<div class="tag">${m.name}</div><div class="q">${esc(question)}</div><div class="msg">Searching your notes…</div>`;
+  $("out").prepend(card);
+  const msg=card.querySelector(".msg");
+  if(!hits.length){msg.textContent="I couldn’t find passages in your notes that match those terms. Try the exact words used in your notes, or add more material.";return;}
+
+  const context=hits.map((h,i)=>`[${i+1}] (${h.doc}, ${h.label})\n${h.text}`).join("\n\n");
+  const rules=allowGeneral
+    ?"Base your answer on the context and cite passages like [1], [2]. If you add anything that is not in the context, put it under a heading “Beyond your notes” and say so clearly."
+    :"Use ONLY the context. Cite passages like [1], [2]. If the context does not contain what is needed, say so plainly instead of guessing.";
+  const prompt=`You are a careful mathematics tutor helping a university student study from their own notes.\n\nTask (${m.name}): ${m.task}\n\nRules: ${rules} Write mathematics in plain readable text (for example x^2, A^(-1), ∫, ∑, √, ≤) without LaTeX commands. Do not invent theorem names, numbers, or results. Check any calculation you show.\n\nContext from the student’s notes:\n${context}\n\nStudent’s request: ${question}`;
+
+  const src=`<details><summary>Sources used (${hits.length})</summary>${hits.map((h,i)=>`<div class="src"><b>[${i+1}] ${esc(h.doc)} · ${esc(h.label)}</b><br>${esc(h.text)}</div>`).join("")}</details>`;
+
+  const sample=await getSample();
+  if(!sample){
+    msg.textContent="Claude isn’t available in this view, so here are the most relevant passages from your notes.";
+    card.insertAdjacentHTML("beforeend",src);return;
+  }
+  $("ask").disabled=true;
+  try{
+    msg.textContent="Thinking…";
+    const r=await sample(prompt,{cache:false,modelTier:"complex",onText:({text})=>{msg.textContent=text;}});
+    msg.textContent=r.text;
+  }catch(e){
+    msg.textContent=e&&e.code==="not_granted"?"Permission to ask Claude was declined, so here are the retrieved passages.":"Something went wrong while asking Claude ("+((e&&e.message)||e)+").";
+  }
+  card.insertAdjacentHTML("beforeend",src);
+  $("ask").disabled=false;
+};
+$("q").addEventListener("keydown",e=>{if(e.key==="Enter")$("ask").click();});
+renderModes();renderExamples();renderDocs();$("q").placeholder=MODES[mode].ph;
+</script>
+</body>
+</html>
